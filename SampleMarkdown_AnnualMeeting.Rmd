@@ -1,0 +1,24 @@
+---
+title: "Sample Template - Annual Meeting 2019"
+author: 'Nick Hanewinckel, FSA, CERA'
+output:
+  pdf_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+# Package Loader
+
+Do you have all the packages we are going to talk about? Are they shiny* and new?
+
+*Disclaimer: this comment is not affiliated with the package 'shiny'made by rstudio.
+
+```{r Pack it up, pack it in, let me begin, echo=FALSE}
+packages <- c("data.table", "ggplot2", "doParallel", "foreach", "glmnet", "survival", "splines", "xgboost", "dplyr", "rprojroot")
+if (length(setdiff(packages, rownames(installed.packages())))>0){
+     install.packages(setdiff(packages, rownames(installed.packages())))
+}
+update.packages(packages)
+```
+
