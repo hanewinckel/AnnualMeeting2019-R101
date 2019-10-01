@@ -257,9 +257,10 @@ plotMeComplex <- dat[,.(Deaths=sum(Deaths),EDmodel=sum(predDeaths),
                        AEcount=sum(Deaths)/sum(predDeaths),
                        Exposure=sum(Exposure)),
                     by=.(Duration,Gender,SmokerStatus,Set)]
+
 ggplot(data=plotMeSimple,aes(x=AttainedAge,y=AEcount,size=Exposure)) + 
   geom_point()+ geom_hline(yintercept=1,color='red',linetype='dashed')+
-  coord_cartesian(ylim=c(0,2)) 
+  coord_cartesian(ylim=c(0,2)) +facet_grid(.~Set)
 
 ggplot(data=plotMeComplex,aes(x=Duration,y=AEcount,size=Exposure,color=SmokerStatus)) + 
   geom_point() + 
