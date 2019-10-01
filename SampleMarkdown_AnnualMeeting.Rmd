@@ -14,11 +14,259 @@ Do you have all the packages we are going to talk about? Are they shiny* and new
 
 *Disclaimer: this comment is not affiliated with the package 'shiny'made by rstudio.
 
-```{r Pack it up, pack it in, let me begin, echo=FALSE}
-packages <- c("data.table", "ggplot2", "doParallel", "foreach", "glmnet", "survival", "splines", "xgboost", "dplyr", "rprojroot")
+```{r Install Packages, echo=FALSE}
+packages <- c("data.table", "ggplot2", "doParallel", "foreach", "glmnet", "survival", "splines", "xgboost", "dplyr", "rprojroot","caret")
 if (length(setdiff(packages, rownames(installed.packages())))>0){
      install.packages(setdiff(packages, rownames(installed.packages())))
 }
-update.packages(packages)
+#update.packages(packages)
 ```
 
+```{r load needed packages}
+library(data.table)
+library(ggplot2)
+library(caret)
+```
+
+# Get/Prepare Data
+
+```{r Read Data}
+pth <- 'C:/Users/hfi/Documents/ILEC_2009-15 Data 20180601.txt'
+dat <- fread(pth,stringsAsFactors = TRUE,nrows=1000000,check.names = TRUE)
+```
+
+## data.table Cheat Sheets
+[Link1](https://github.com/rstudio/cheatsheets/raw/master/datatable.pdf)
+
+[Link2](https://www.datacamp.com/community/tutorials/data-table-cheat-sheet)
+
+[Link3 - Longer, but good](https://s3.amazonaws.com/assets.datacamp.com/img/blog/data+table+cheat+sheet.pdf)
+
+### Curious how I embedded all these cool links?
+[rmarkdown Cheat Sheet](https://github.com/rstudio/cheatsheets/raw/master/rmarkdown-2.0.pdf)
+
+See a pattern here? <https://rstudio.com/resources/cheatsheets/>
+
+## Demo - Speed Test
+
+```{r speed test}
+#Reading Test Sample Records
+temp <- Sys.time()
+invisible(read.csv(pth,header=TRUE,stringsAsFactors = TRUE,nrows = 1000000))
+print("read.csv time: ");print(Sys.time()-temp)
+  
+temp <- Sys.time()
+invisible(fread(pth,stringsAsFactors = TRUE,nrows = 1000000))
+print("fread time: ");print(Sys.time()-temp)
+
+```
+
+## Data Wrangle
+
+```{r Basic Data Wangling - data.table}
+setnames(dat,'Number.of.Deaths','Deaths')
+setnames(dat,'Policies.Exposed','Exposure')
+invisible(sapply(names(dat),function(x) setnames(dat,x,gsub('\\.','',x))))
+
+#Get names of fields
+names(dat)
+
+#Show row count for rows with no exposure
+dat[Exposure==0,.N]
+dat[AmountExposed==0,.N]
+
+#Fix Rows with No Exposure
+dat <- dat[Exposure > 0 & AmountExposed >0]
+
+#Quantify non-level or unknown term products
+table(dat$SOAGuaranteedLevelTermPeriod)
+
+#Remove non-level Term
+dat <- dat[!SOAGuaranteedLevelTermPeriod %in% c('Unknown','Not Level Term')]
+#Verfy Removal
+table(dat$SOAGuaranteedLevelTermPeriod)
+
+#See Where Death > Exposure
+dat[Deaths>Exposure,.N]
+
+#I will NOT clean this, as I plan to use a poisson regresison anyway
+```
+
+# Plotting
+ggplot2 is your best friend!
+
+Get your cheatsheet here:
+[Rstudio's ggplot cheat sheet](https://github.com/rstudio/cheatsheets/raw/master/data-visualization-2.1.pdf)
+
+## Format Data
+
+Data must be 'plottable' (formatted like your desired plot)
+
+I like to make a temporary table specific to the plot. For this, I want an A/E by Count. Can you figure out how to make one by amount?
+
+I will make a few temporary tables to show how this is necessary for similar views with more variables.
+
+I include variables that may seem "extra", but will be used to convey additional graph information.
+
+**GET YOUR MONEY'S WORTH OUT OF INCLUDING AS MUCH INFO AS REASONABLE!**
+
+```{r ggformat}
+plotMeSimple <- dat[,.(Deaths=sum(Deaths),EDvbt15=sum(ExpectedDeathQX2015VBTbyPolicy),
+                       AEcount=sum(Deaths)/sum(ExpectedDeathQX2015VBTbyPolicy),
+                       Exposure=sum(Exposure)),
+                    by=AttainedAge][order(AttainedAge)]
+#Note - I did not "need" [order(AttainedAge)], but it can be nice to have data ordered!
+plotMeComplex <- dat[,.(Deaths=sum(Deaths),EDvbt15=sum(ExpectedDeathQX2015VBTbyPolicy),
+                       AEcount=sum(Deaths)/sum(ExpectedDeathQX2015VBTbyPolicy),
+                       Exposure=sum(Exposure)),
+                    by=.(Duration,Gender,SmokerStatus,InsurancePlan)]
+```
+
+## Plot 
+
+Here, note that it's imporant to use *all* the categorical variables I defined in my temporary tables. While we can't (obviously) use variables that don't exist, if we don't use all of them the plot may look like it has "extraneous" graphing. An example would be if I didn't use Gender in a plot, but it was in my table. Now I'd have two "dots" for each age.
+
+Additional numeric variables (e.g. Exposure) are less strict. I can choose to use Exposure to indicate the size of my plots, or not, with no ill side effects.
+
+```{r Plotting}
+ggplot(data=plotMeSimple,aes(x=AttainedAge,y=AEcount,size=Exposure)) + 
+  geom_point()
+
+ggplot(data=plotMeComplex,aes(x=Duration,y=AEcount,size=Exposure,color=SmokerStatus)) + 
+  geom_point() + 
+  facet_grid(Gender~InsurancePlan)
+```
+
+### Wait
+
+I can't see that last one?
+
+Okay, sometimes we have to get creative when we look at how a graph turns out:
+```{r Fix plotting}
+
+ggplot(data=plotMeComplex,aes(x=Duration,y=AEcount,size=Exposure,color=SmokerStatus)) + 
+  geom_point() + 
+  facet_grid(Gender~InsurancePlan)+
+  coord_cartesian(ylim=c(0,2)) +
+  geom_hline(yintercept=1,color='red',linetype='dashed')
+  
+```
+
+### Takeaways
+
+This is not a great dataset...to be expected with a small subset of a full dataset. A big takeaway challenge - how can we add CIs so we can tell when an A/E is meaningful? A hint...?qpois.
+
+# Model
+
+Now the heart of what many want to do - modelling. Since this is a somewhat incomplete dataset, this gives us a chance to see how to use a predictive model (glm) to adjust a given basis.
+
+Let's assume that this company uses the 2015 VBT table as its baseline assumptions. They would like to know what factors or multiples they could apply to this table to make it fit there business better.
+
+## Offset
+
+We will fit a model to 'correct' the basis by using that basis as an Offset.
+
+### What is an offset?
+
+In Regression, offsets are variables that always receive a coefficient of 1. The model will not "solve" for their coefficient, but will always assume it's one.
+
+### Why do we usually use it
+
+A common use for offset is for the "exposure" in, say, a poisson model. This means $e^{MortalityRate}$ always gets multiplied by $e^{Exposure}$ just like in a poisson regression. This implies our $Offset=ln(Exposure)$
+
+### How will we use it now
+
+With the magic of algebra, if we use $Offset=ln(ExpectedDeaths)$ we essentially make our offset= $log(HazardRate*Exposure)$ and our model will solve for the coefficients that take the Mortality Assumption to an adjusted Mortality Assumption by solving for Deaths.
+
+## In Action
+
+```{r offset}
+model <- glm(Deaths ~ (AttainedAge + Duration + Gender + SmokerStatus)^2,
+             data=dat,offset=log(ExpectedDeathQX2015VBTbyPolicy),family='poisson')
+
+dat[,predDeaths:=predict(model,newdata=dat,type='response')]
+dat[,modelQX:=predDeaths/Exposure]
+
+#Duplicate prior plots
+plotMeSimple <- dat[,.(Deaths=sum(Deaths),EDmodel=sum(predDeaths),
+                       AEcount=sum(Deaths)/sum(predDeaths),
+                       Exposure=sum(Exposure)),
+                    by=AttainedAge]
+plotMeComplex <- dat[,.(Deaths=sum(Deaths),EDmodel=sum(predDeaths),
+                       AEcount=sum(Deaths)/sum(predDeaths),
+                       Exposure=sum(Exposure)),
+                    by=.(Duration,Gender,SmokerStatus,InsurancePlan)]
+ggplot(data=plotMeSimple,aes(x=AttainedAge,y=AEcount,size=Exposure)) + 
+  geom_point()+ geom_hline(yintercept=1,color='red',linetype='dashed')
+
+ggplot(data=plotMeComplex,aes(x=Duration,y=AEcount,size=Exposure,color=SmokerStatus)) + 
+  geom_point() + 
+  facet_grid(Gender~InsurancePlan)+
+  coord_cartesian(ylim=c(0,2)) +
+  geom_hline(yintercept=1,color='red',linetype='dashed')
+```
+
+### These Results Are...fine?
+
+Yes! They are not great! Why?
+
+* Using a subset of data
+    + Not much we can do about this
+    + For fun we'll add more records to see if this helps
+* Using a wide range of data
+    + Let's focus just on term
+* Overfit!
+    + I may have over-specified this model and its interactions
+    + I didn't use a testing/training set, which would catch it
+    + I should have (perhaps) used a penalized model for so many variables
+* Other Data Issues
+    + Remove post-level term
+  
+```{r Model Fix}
+#ReRead bigger data
+dat <- fread(pth,stringsAsFactors = TRUE,nrows=5000000,check.names = TRUE)
+setnames(dat,'Number.of.Deaths','Deaths')
+setnames(dat,'Policies.Exposed','Exposure')
+invisible(sapply(names(dat),function(x) setnames(dat,x,gsub('\\.','',x))))
+#Fix Rows with No Exposure
+dat <- dat[Exposure > 0 & AmountExposed >0]
+#Term Only
+dat <- dat[InsurancePlan == 'Term']
+#Remove non-level Term
+dat <- dat[!SOAGuaranteedLevelTermPeriod %in% c('Unknown','Not Level Term')]
+#Remove post-level term
+dat <- dat[SOAPostleveltermindicator == 'Within Level Term']
+#Split Test/Train
+trainingRows <- createDataPartition(dat$AttainedAge,p=.7,list=FALSE)
+dat[,Set:='Testing']
+dat[trainingRows,Set:='Training']
+
+model <- glm(Deaths ~ (AttainedAge + Duration + Gender + SmokerStatus)^2,
+             data=dat[Set=='Training'],offset=log(ExpectedDeathQX2015VBTbyPolicy),family='poisson')
+
+dat[,predDeaths:=predict(model,newdata=dat,type='response')]
+dat[,modelQX:=predDeaths/Exposure]
+
+#Duplicate prior plots
+plotMeSimple <- dat[,.(Deaths=sum(Deaths),EDmodel=sum(predDeaths),
+                       AEcount=sum(Deaths)/sum(predDeaths),
+                       Exposure=sum(Exposure)),
+                    by=.(AttainedAge,Set)]
+plotMeComplex <- dat[,.(Deaths=sum(Deaths),EDmodel=sum(predDeaths),
+                       AEcount=sum(Deaths)/sum(predDeaths),
+                       Exposure=sum(Exposure)),
+                    by=.(Duration,Gender,SmokerStatus,Set)]
+ggplot(data=plotMeSimple,aes(x=AttainedAge,y=AEcount,size=Exposure)) + 
+  geom_point()+ geom_hline(yintercept=1,color='red',linetype='dashed')+
+  coord_cartesian(ylim=c(0,2)) 
+
+ggplot(data=plotMeComplex,aes(x=Duration,y=AEcount,size=Exposure,color=SmokerStatus)) + 
+  geom_point() + 
+  facet_grid(Gender~Set)+
+  coord_cartesian(ylim=c(0,2)) +
+  geom_hline(yintercept=1,color='red',linetype='dashed')
+
+dat[,.(AECount=sum(Deaths)/sum(predDeaths)),by=Set]
+```
+
+  
